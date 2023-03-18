@@ -96,10 +96,10 @@ void setup ()
   int tmp_t = EEPROM.read(T_ADDR);
   if (tmp_t > 0 && tmp_t < 40) {
     t_setpoint = tmp_t;
-    Serial.print("Stored setpoint found:");
+    Serial.print("Stored setpoint:");
   }
   else 
-    Serial.print("No stored setpoint found, using default: ");
+    Serial.print("No stored setpoint, using default: ");
   Serial.println(t_setpoint);
 }
 
@@ -177,7 +177,7 @@ void processKeyPad()
       if ( (tc%5000) == 0) {
         lcd.clear(); lcd.setCursor(0,0);
         if (++state >= 3) { state = 0;  }
-        Serial.print("State:"); Serial.println(state);
+//        Serial.print("State:"); Serial.println(state);
         if (state != 0) bDamperOpen = (state == 1);
         if (bDamperOpen)
           lcd.print("DAMPER OPEN");
@@ -210,7 +210,7 @@ void processKeyPad()
         lcd.setCursor(0,0);           // set the position of next message string: 
         EEPROM.update(T_ADDR, t_setpoint);
         lcd.print("SETPOINT STORED");
-        Serial.print("Storing new set point of: "); Serial.println(t_setpoint);
+        Serial.print("Storing new setpoint: "); Serial.println(t_setpoint);
         delay(2500);
         backLightTimer = 255;   // force dim
       }
@@ -245,31 +245,16 @@ void logTemps()
   
   // call sensors.requestTemperatures() to issue a global temperature 
   // request to all devices on the bus
-  Serial.print("Requesting temperatures...");
+  Serial.print("Trps:");
   sensors.requestTemperatures(); // Send the command to get temperatures
-  // After we got the temperatures, we can print them here.
 
   t = sensors.getTempC(room);
-  if (t<85) { temp[ROOM] = t*10.0; Serial.print(" got room..."); }
+  if (t<85) { temp[ROOM] = t*10.0; Serial.print(temp[ROOM]/10.0); } else { Serial.print("R"); }
+  Serial.print(",");
   t = sensors.getTempC(plenum);
-  if (t<85) { temp[PLENUM] = t*10.0;; Serial.print(" got plenum..."); }
+  if (t<85) { temp[PLENUM] = t*10.0; Serial.print(temp[PLENUM]/10.0); } else { Serial.print("P"); }
 
-  Serial.print(" TR="); Serial.print( temp[ROOM]/10.0 );
-  Serial.print(" TP="); Serial.print( temp[PLENUM]/10.0 );
-  Serial.print(" TS="); Serial.print( t_setpoint );
-  
-  Serial.println(" DONE");
-  
-  // We use the function ByIndex, and as an example get the temperature from the first sensor only.
-//  for (int i=0; i<deviceCount; i++) {
-//    Serial.print("Temperature for the device ");
-//    Serial.print(i);
-//    Serial.print(" is: ");
-//    t = sensors.getTempCByIndex(i);
-//    if (t<85) temp[i] = t;  // sanity check. Devices sometimes get excited and return 85.something.
-//    Serial.println(temp[i]);  
-////    delay(25);
-//  }
+  Serial.print(","); Serial.println( t_setpoint );
 }
 
 void updateDisplay()
@@ -333,12 +318,18 @@ void dumpOneWireAddresses()
 void pulseDamper(bool bOpen){
   static boolean bState = true;
   static int tc;
-
+  int Pttl = 3000;    // Total pulse length (delay between pulses to let servo catch it's breath
+  int P0 = 500;       // Open pulse length
+  int P1 = 2250;      // Close pulse length
+  static int Pc = P1; // current position
+  static int Ps = 1;  // step
+  
   if (bOpen != bState)
   {
     bState = bOpen;
-    if (bOpen) Serial.println("D=Open"); else Serial.println("D=Close");
-    tc = 100;
+    if (bOpen) Serial.println("D:O"); else Serial.println("D:C");
+    tc = 125;
+    Ps = 1;
   }
   
   if (!tc) {
@@ -346,15 +337,20 @@ void pulseDamper(bool bOpen){
   }
   tc--;
 
-
-  int Pttl = 3000;  // Total pulse length (delay between pulses to let servo catch it's breath
-  int P0 = 500;  // Open pulse length
-  int P1 = 2250;   // Close pulse length
+  if (bOpen) {
+    Pc -= Ps; Ps++;
+    if (Pc < P0) Pc = P0;
+  } else {
+    Pc += Ps; Ps++;
+    if (Pc > P1) Pc = P1;
+  }
   
   digitalWrite(damperPIN, HIGH);
-  if (bOpen) delayMicroseconds(P0); else delayMicroseconds(P1);
+//  if (bOpen) delayMicroseconds(P0); else delayMicroseconds(P1);
+  delayMicroseconds(Pc);
   digitalWrite(damperPIN, LOW);
-  if (bOpen) delayMicroseconds(Pttl - P0); else delayMicroseconds(Pttl - P1);
+//  if (bOpen) delayMicroseconds(Pttl - P0); else delayMicroseconds(Pttl - P1);
+  delayMicroseconds(Pttl - Pc);
 }
 
 //
@@ -373,15 +369,42 @@ void pulseDamper(bool bOpen){
 //    Open if (Tr+0.5 > Ts && Tp+0.5 < Ts) // too warm and cooling
 //      || (Tr-0.5 < Ts && Tp-0.5 > Ts)  // too cool and heating
 //
-void controlDamper()
+void controlDamper_old()
 {
   if (bDamperOpen) {
     bDamperOpen = ! ( ((temp[ROOM] - 5) > (t_setpoint*10) && temp[PLENUM] > (temp[ROOM] + 5) )   // Too hot - don't heat
                 || ((temp[ROOM] + 5) < (t_setpoint*10) && temp[PLENUM] < (temp[ROOM] - 5) ) ); // Too cold - don't cool
   } else {
-    bDamperOpen =  ( ((temp[ROOM] - 5) > (t_setpoint*10) && temp[PLENUM] < (temp[ROOM] + 5) )   // Too hot - please cool
-                || ((temp[ROOM] + 5) < (t_setpoint*10) && temp[PLENUM] > (temp[ROOM] - 5) ) ); // Too cold - please heat
+    bDamperOpen =  ( ((temp[ROOM] - 5) > (t_setpoint*10) && temp[PLENUM] < (temp[ROOM] - 5) )   // Too hot - please cool
+                || ((temp[ROOM] + 5) < (t_setpoint*10) && temp[PLENUM] > (temp[ROOM] + 5) ) ); // Too cold - please heat
   }
 
   pulseDamper(bDamperOpen);
+}
+
+// Matt's version to introduce better hysteresis
+void controlDamper()
+{
+  int closeEnough = 10; // within a degree of setpoint, always stay open
+  int hysteresis = 5; // how far into close zone must room temperature get before closing?
+        // also, how far into the open quadrant must plenum temperature get before opening?
+  
+  bool withinTRCE = (    temp[ROOM] - closeEnough < t_setpoint    &&    temp[ROOM] + closeEnough > t_setpoint    ); // is the room temperature close enough to the setpoint to just stay open?
+  bool withinTRH = (    temp[ROOM] - closeEnough - hysteresis < t_setpoint    &&    temp[ROOM] + closeEnough + hysteresis > t_setpoint    ); // is the room temperature within the hysteresis distance of the close enough zone?
+  bool withinTPH = (    temp[PLENUM] - hysteresis < temp[ROOM]    &&    temp[PLENUM] + hysteresis > temp[ROOM]    ); // is the plenum temperature within the hysteresis distance of the room?
+  bool openQuadrant = (    temp[ROOM] < t_setpoint    ); // are we in one of the quadrants where the valve should be open?
+      // in other words, is the plenum closer to the setpoint then the room is?
+    
+  if (    temp[PLENUM] < temp[ROOM]    )
+    openQuadrant = ! openQuadrant;
+  
+  if (bDamperOpen) {    // damper is open, stay open as long as we are in the open quadrants OR in room temperature hysteresis zone
+    bDamperOpen = openQuadrant || withinTRH;
+  } else {      // damper is closed, open if we enter the close enough zone or past the damper hysteresis in an open quadrant
+    bDamperOpen = withinTRCE    ||    ( openQuadrant && ! withinTPH);
+  }
+  
+
+  pulseDamper(bDamperOpen);
+
 }
